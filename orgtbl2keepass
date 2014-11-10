@@ -1,80 +1,124 @@
 #!/usr/bin/perl -w
 
 use strict;
+
 use File::KeePass;
-use JSON;
 
-my $config;
-my $config_file = $ENV{"HOME"} . '/.orgtbl2keepassrc.json';
+# password for the keepass database
+my $master_pass = 'secret';
 
-{
-    # load config file
-    local $/;
-    open( my $fh, '<', $config_file ) or die qq^Unable to open config file $config_file . Create it like this:
+# path and filename for the keepass database
+my $password_kdb_file = 'passwords-test.kdb';
 
-{
-    "master_password"      : "secret",
-    "password_kdb_file"    : "/home/username/path/passwords.kdb",
-    "password_org_file"    : "/home/username/path/passwords.org",
-    "password_table_start" : "* websites"
-}
-^;
+# path and filename for the passwords.org file
+my $password_org_file = 'passwords.org';
 
-    my $json_text   = <$fh>;
-    $config = decode_json( $json_text );
-}
+# the passwords table starts at this line/word
+my $password_table_start = '* passwords';
+
 
 my $k = File::KeePass->new;
 
-open my $f, "<", $config->{password_org_file} or die "unable to open password org file ",
-$config->{password_org_file}, ", $!\n";
 
-my @columns ;
+
+open my $f, "<", $password_org_file or die "unable to open password org file, $!\n";
+undef $/;
+my $orgtbl = $1 if <$f> =~ m/
+                        \Q$password_table_start\E\n
+                        \|[\-\+]+\|\n
+                        (.*?\n)
+                        \|[\-\+]+\|\n
+                    /sx;
+close $f;
+
+
 
 #split on (multiple) empty lines
-while (<$f>)
+foreach (split /(?:\| +\| +\|\n)+/, $orgtbl)
 {
-    # skip to table start
-    next if 1 .. m/\Q$config->{password_table_start}\E/;
+    my $record;
 
-    # skip empty rows
-    next if m/^[\|\-\+ ]+$/;
+    #print "RECORD:\n$_\n";
 
-    # end on next org heading or empty line
-    last if m/^\*/ or m/^\s*$/;
 
-    my ($record, @line);
-
-    if (not @columns)
+    # third format
+    if (m/^
+          \|\ (.+?)\ +\|\ +\|\n
+          \|\ (.+?)\ +\|\ (.+?)\ +\|\n
+          \|\ (.+?)\ +\|\ +\|\n
+         /x)
     {
-        # first line
-        $_ = lc;                # use lowercase column names
-        @columns = split / *\| */;
-        next;
+        $record = {
+                title     => $1,
+                username  => $2,
+                password  => $3,
+                comment   => $4
+            };
+        #print "third format\n";
     }
+
+
+    # third format with opposite line order
+    if (m/^
+          \|\ (.+?)\ +\|\ +\|\n
+          \|\ (.+?)\ +\|\ +\|\n
+          \|\ (.+?)\ +\|\ (.+?)\ +\|\n
+         /x)
+    {
+        $record = {
+                title    => $1,
+                comment  => $2,
+                username => $3,
+                password => $4
+            };
+
+        #print "third format with opposite order\n";
+    }
+
+    # second format
+    elsif (m/^
+             \|\ (.+?)\ +\|\ +\|\n
+             \|\ (.+?)\ +\|\ (.+?)\ +\|\n
+            /x)
+    {
+        $record = {
+                title    => $1,
+                username => $2,
+                password => $3
+            };
+
+        #print "second format\n";
+    }
+
+
+    # first format
+    elsif (m/^\| (.+?) +\| (.+?) +\|\n/)
+    {
+        $record = {
+                title    => $1,
+                password => $2
+            };
+
+        #print "first format\n";
+    }
+
     else
     {
-        # not the first line
-        @line =  split / *\| */;
+        #print "no match!\n";
+        next;
     }
 
-    for (my $column = 0; $column < scalar @columns; $column++)
-    {
-        $record -> { $columns[$column] } = $line[$column];
-    }
+    # print Dumper $record;
+    # print "\n\n";
 
     $k->add_entry( $record );
 
+
 }
 
-close $f;
+
 
 # save out a version 1 database
-$k->save_db
-(
-    $config->{password_kdb_file},
-    $config->{master_password}
-)
-or die "unable to save password kdb file ", $config->{password_kdb_file}, ", $!\n";
+$k->save_db($password_kdb_file, $master_pass) or die "unable to save password kdb file, $!\n";
 
 
