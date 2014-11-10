@@ -1,111 +1,80 @@
 #!/usr/bin/perl -w
 
 use strict;
-
 use File::KeePass;
+use JSON;
 
-my $master_pass = 'secret';
-my $file = 'passwords-test.kdb';
+my $config;
+my $config_file = $ENV{"HOME"} . '/.orgtbl2keepassrc.json';
 
+{
+    # load config file
+    local $/;
+    open( my $fh, '<', $config_file ) or die qq^Unable to open config file $config_file . Create it like this:
+
+{
+    "master_password"      : "secret",
+    "password_kdb_file"    : "/home/username/path/passwords.kdb",
+    "password_org_file"    : "/home/username/path/passwords.org",
+    "password_table_start" : "* websites"
+}
+^;
+
+    my $json_text   = <$fh>;
+    $config = decode_json( $json_text );
+}
 
 my $k = File::KeePass->new;
 
-# read a version 1 or version 2 database
-#$k->load_db($file, $master_pass); # errors die
+open my $f, "<", $config->{password_org_file} or die "unable to open password org file ",
+$config->{password_org_file}, ", $!\n";
 
-#$k->unlock;
+my @columns ;
 
-my %site;
-
-
-
-open my $f, "<", "passwords.org" or die $!;
-
-
+#split on (multiple) empty lines
 while (<$f>)
 {
-    # skip until passwords part
-    next if 1 .. m/^\* passwords$/i;
+    # skip to table start
+    next if 1 .. m/\Q$config->{password_table_start}\E/;
 
-    my ($user, $pw) = getLine($_);
+    # skip empty rows
+    next if m/^[\|\-\+ ]+$/;
 
-    # username/sitename and password
-    if ($user and $pw)
+    # end on next org heading or empty line
+    last if m/^\*/ or m/^\s*$/;
+
+    my ($record, @line);
+
+    if (not @columns)
     {
-        if ($site{name})
-        {
-            # format 2 or 3, multi-line record
-            if ($site{user} and $site{pw})
-            {
-                print "line discarded for $site{name}: $user | $pw\n";
-            }
-            else
-            {
-                $site{user} = $user;
-                $site{pw}   = $pw;
-            }
-        }
-        else
-        {
-            $site{name} = $user;
-            $site{pw}   = $pw;
-        }
-    }
-    elsif ($user and not $pw)
-    {
-        # only sitename/email address on line.
-        if ($site{name})
-        {
-            # if site name already set, can be an email address
-            if ($user =~ m/@/)
-            {
-                $site{email} = $user
-            }
-            else
-            {
-                print "line discarded for $site{name}: $user\n";
-            }
-        }
-        else
-        {
-            # First occurrence is the sitename.
-            $site{name} = $user;
-        }
+        # first line
+        $_ = lc;                # use lowercase column names
+        @columns = split / *\| */;
+        next;
     }
     else
     {
-        # empty line, end of record
-        if ($site{pw})
-        {
-            my $e = $k->add_entry({
-                    title    => $site{name},
-                    username => $site{user},
-                    password => $site{pw},
-                });
-
-        }
-        else
-        {
-            # empty record, nothing to do
-        }
+        # not the first line
+        @line =  split / *\| */;
     }
 
+    for (my $column = 0; $column < scalar @columns; $column++)
+    {
+        $record -> { $columns[$column] } = $line[$column];
+    }
+
+    $k->add_entry( $record );
+
 }
+
+close $f;
 
 # save out a version 1 database
-$k->save_db($file, $master_pass);
+$k->save_db
+(
+    $config->{password_kdb_file},
+    $config->{master_password}
+)
+or die "unable to save password kdb file ", $config->{password_kdb_file}, ", $!\n";
 
 
-
-sub getLine
-{
-    my $line = shift;
-    my ($a,$b) = ($1,$2) if $line =~ m`^\| (.+) \| (.+) \|$`;
-    return ( trim($a), trim($b) );
-}
-
-sub trim
-{
-    my $line = shift;
-    return $1 if $line =~ m/^ *(.*?) *$/;
-}
