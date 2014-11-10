@@ -1,0 +1,111 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+use File::KeePass;
+
+my $master_pass = 'secret';
+my $file = 'passwords-test.kdb';
+
+
+my $k = File::KeePass->new;
+
+# read a version 1 or version 2 database
+#$k->load_db($file, $master_pass); # errors die
+
+#$k->unlock;
+
+my %site;
+
+
+
+open my $f, "<", "passwords.org" or die $!;
+
+
+while (<$f>)
+{
+    # skip until passwords part
+    next if 1 .. m/^\* passwords$/i;
+
+    my ($user, $pw) = getLine($_);
+
+    # username/sitename and password
+    if ($user and $pw)
+    {
+        if ($site{name})
+        {
+            # format 2 or 3, multi-line record
+            if ($site{user} and $site{pw})
+            {
+                print "line discarded for $site{name}: $user | $pw\n";
+            }
+            else
+            {
+                $site{user} = $user;
+                $site{pw}   = $pw;
+            }
+        }
+        else
+        {
+            $site{name} = $user;
+            $site{pw}   = $pw;
+        }
+    }
+    elsif ($user and not $pw)
+    {
+        # only sitename/email address on line.
+        if ($site{name})
+        {
+            # if site name already set, can be an email address
+            if ($user =~ m/@/)
+            {
+                $site{email} = $user
+            }
+            else
+            {
+                print "line discarded for $site{name}: $user\n";
+            }
+        }
+        else
+        {
+            # First occurrence is the sitename.
+            $site{name} = $user;
+        }
+    }
+    else
+    {
+        # empty line, end of record
+        if ($site{pw})
+        {
+            my $e = $k->add_entry({
+                    title    => $site{name},
+                    username => $site{user},
+                    password => $site{pw},
+                });
+
+        }
+        else
+        {
+            # empty record, nothing to do
+        }
+    }
+
+}
+
+# save out a version 1 database
+$k->save_db($file, $master_pass);
+
+
+
+sub getLine
+{
+    my $line = shift;
+    my ($a,$b) = ($1,$2) if $line =~ m`^\| (.+) \| (.+) \|$`;
+    return ( trim($a), trim($b) );
+}
+
+sub trim
+{
+    my $line = shift;
+    return $1 if $line =~ m/^ *(.*?) *$/;
+}
